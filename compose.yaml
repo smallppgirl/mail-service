@@ -1,0 +1,109 @@
+name: outlook-mail-service
+
+x-app: &app
+  build:
+    context: .
+    target: runtime
+  image: outlook-mail-service:0.1.0
+  env_file: .env
+  environment:
+    DATABASE_URL: postgresql+psycopg://mail:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/mail
+    REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD}@redis:6379/0
+    S3_ENDPOINT: http://minio:9000
+    S3_ACCESS_KEY: ${MINIO_ROOT_USER:?Set MINIO_ROOT_USER}
+    S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD}
+  restart: unless-stopped
+  stop_grace_period: 60s
+  depends_on:
+    init:
+      condition: service_completed_successfully
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: mail
+      POSTGRES_USER: mail
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes: [postgres-data:/var/lib/postgresql/data]
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U mail -d mail"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    command: [redis-server, --appendonly, "yes", --maxmemory-policy, noeviction, --requirepass, "${REDIS_PASSWORD:?Set REDIS_PASSWORD}"]
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
+    volumes: [redis-data:/data]
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: [server, /data, --console-address, ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?Set MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD}
+    volumes: [minio-data:/data]
+    ports: ["127.0.0.1:9001:9001"]
+    restart: unless-stopped
+
+  init:
+    <<: *app
+    restart: "no"
+    command: [python, scripts/initialize.py]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_started
+
+  api:
+    <<: *app
+    ports: ["127.0.0.1:${API_PORT:-8000}:8000"]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    <<: *app
+    command: [celery, -A, mail_service.tasks:celery, worker, -Q, mail, --concurrency=2, --loglevel=INFO]
+
+  sender:
+    <<: *app
+    command: [celery, -A, mail_service.tasks:celery, worker, -Q, sender, --concurrency=1, --loglevel=INFO]
+
+  beat:
+    <<: *app
+    command: [celery, -A, mail_service.tasks:celery, beat, --schedule=/tmp/celerybeat-schedule, --loglevel=INFO]
+
+  tests:
+    profiles: [test]
+    build:
+      context: .
+      target: tests
+    environment:
+      DATABASE_URL: "sqlite:///:memory:"
+      REDIS_URL: redis://localhost:6379/0
+      TEST_DATABASE_URL: postgresql+psycopg://mail:${POSTGRES_PASSWORD}@postgres:5432/mail
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: [pytest, -q, -p, "no:cacheprovider"]
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:

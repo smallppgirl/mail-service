@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "outlook-mail-service"
+version = "0.1.0"
+description = "Durable hybrid Outlook mailbox archive and shared sending API"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115,<1", "uvicorn>=0.30,<1", "sqlalchemy>=2.0,<3",
+  "psycopg[binary]>=3.2,<4", "alembic>=1.14,<2", "celery[redis]>=5.5,<6",
+  "boto3>=1.35,<2", "httpx>=0.28,<1", "msal>=1.31,<2",
+  "pydantic-settings>=2.7,<3", "python-multipart>=0.0.20,<1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "ruff>=0.9,<1"]
+
+[project.scripts]
+mail-service = "mail_service.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["mail_service*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
